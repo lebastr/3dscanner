@@ -1,10 +1,13 @@
 import os
 from glob import glob
 
-from PIL import Image
+import imgaug
+import imageio
+from imgaug.augmentables.kps import Keypoint, KeypointsOnImage
+
+import numpy as np
 
 import torch
-import torchvision as tv
 import torch.utils.data as td
 
 
@@ -25,31 +28,35 @@ class GridDataset(td.Dataset):
 
                 labels = eval(f.read())
 
-                img = Image.open(jpg_name)
+                img = imageio.imread(jpg_name)
 
                 for lbl in labels:
-                    color = lbl
-                    corners = torch.tensor([0, img.size[1]]) + torch.tensor([1, -1]) * torch.tensor(lbl[1:5])
-                    neighs =  torch.tensor([0, img.size[1]]) + torch.tensor([1, -1]) * torch.tensor(lbl[5:])
+                    print('lbl', lbl[1:5])
+                    color = lbl[0]
+                    corners = np.array(lbl[1:5]) * ([1, -1]) + [0, img.shape[0]]
+                    neighs = np.array(lbl[5:]) * ([1, -1]) + [0, img.shape[0]]
 
-                    self.dataset.append({'img': img , 'corners': corners.float(), 'neighs': neighs.float()})
+                    self.dataset.append({'img': img, 'color': color, 'corners': corners, 'neighs': neighs})
 
         self.size = len(self.dataset)
 
     def __len__(self):
-        return self.dataset
+        return len(self.dataset)
 
     def __getitem__(self, item):
         dp = self.dataset[item]
         corners = dp['corners']
         neighs = dp['neighs']
-        center = corners.mean(dim=0)
-        ng = (neighs - center) * 2 + center
-        mins = ng.min(dim=0)[0]
-        maxs = ng.max(dim=0)[0]
+        center = corners.mean(axis=0)
+        ng = (neighs - center) * 3 + center
+        mins = ng.min(axis=0).round().astype(int)
+        maxs = ng.max(axis=0).round().astype(int)
 
-        print(mins, maxs)
+        patch = dp['img'][mins[1]:maxs[1], mins[0]:maxs[0], :]
+        corners -= mins
+        neighs -= mins
 
-        patch = dp['img'].crop((mins[0].item(), mins[1].item(), maxs[0].item(), maxs[1].item()))
+        keypoints = np.concatenate([np.array([1, dp['color'], 1,1,1,1]), corners[:,0], corners[:,1], neighs[:,0], neighs[:,1]])
 
-        return { 'img': patch, 'corners': corners - mins, 'neighs': neighs - mins}
+        return torch.tensor(patch).permute([2,0,1]).float() / 255, torch.tensor(keypoints).float()
+        #return { 'img': patch, 'corners': corners , 'neighs': neighs, 'keypoints':keypoints}
