@@ -4,11 +4,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
-
+from collections import deque
 
 class Net(nn.Module):
     n_points = 8
     n_probs = 6
+
+    c_parts = [(4*i, 4 + 4*i) for i in range(4)]
+
     def __init__(self):
         super(Net, self).__init__()
         self.conv1 = nn.Conv2d(3, 20, 5, 1)
@@ -24,28 +27,64 @@ class Net(nn.Module):
         x = x.view(-1, 4 * 4 * 50)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
-        logits = x[:, :self.n_probs]
+        probs = F.sigmoid(x[:, :self.n_probs])
         coords = x[:, self.n_probs:]
-        return F.sigmoid(logits), coords
+
+        coord_parts = [coords[:, self.c_parts[i][0] : self.c_parts[i][1]] for i in range(4)]
+
+        return probs[:, 2], probs[:, 2:self.n_probs], coord_parts
+
+
+def symmetry_loss(gc_pred, nb_pred_o, coords_pred_o, gc_target, nb_target, coords_target):
+    rot = deque(range(4))
+    losses = []
+
+    for i in range(len(rot)):
+        nb_pred = nb_pred_o[:, rot]
+        coords_pred = coords_pred_o[:, rot]
+
+        coord_corners_loss = torch.sum((coords_target[0] - coords_pred[0])**2 + (coords_target[1] - coords_pred[1])**2)
+
+        mse_coord_neighborhood_t = (coords_target[2] - coords_pred[2])**2 + (coords_target[3] - coords_pred[3])**2
+        neighborhood_loss = torch.sum((1-nb_target) * torch.log(1-nb_pred) + nb_target*(torch.log(nb_pred) + mse_coord_neighborhood_t))
+
+        loss = coord_corners_loss + neighborhood_loss
+        losses.append(loss)
+
+        rot.rotate(1)
+
+    sym_loss = torch.min(losses)
+
+    g_t = gc_target[:, 0]
+    c_t = gc_target[:, 1]
+
+    g_p = gc_pred[:, 0]
+    c_p = gc_pred[:, 1]
+
+    color_loss = (1 - c_t) * torch.log(1 - c_p) + c_t * torch.log(c_p)
+    loss = (1-g_t) * torch.log(1-g_p) + g_t * (torch.log(g_p) + color_loss + sym_loss)
+
+    return loss
 
 
 def train(args, model, device, train_loader, optimizer, epoch):
     model.train()
+
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
-        t_p = target[:,:Net.n_probs]
-        t_c = target[:, Net.n_probs:]
-        o_p, o_c = model(data)
-        loss = -(1-t_p[:,0])*torch.log(1-o_p[:,0]) + t_p[:,0] * torch.log(o_p[:, 0]) * \
-                  ( (1-t_p[:,1])*torch.log(1-o_p[:,1]) + (t_p[1])*torch.log(o_p[1]) +
-                    (o_c[:, :4*2] - t_c[:, :4*2])**2 +
-                    (1-t_p[:,2])*torch.log(1-o_p[:,2]) + (t_p[:,2])*torch.log(o_p[:,2]) +
-                    (1-t_p[:,3])*torch.log(1-o_p[:,3]) + (t_p[:,3])*torch.log(o_p[:,3]) +
-                    (1-t_p[:,4])*torch.log(1-o_p[:,4]) + (t_p[:,4])*torch.log(o_p[:,4]) +
-                    (1-t_p[:,5])*torch.log(1-o_p[:,5]) + (t_p[:,5])*torch.log(o_p[:,5]))
 
+        gc_pred, nb_pred, coords_pred = model(data)
+
+        gc_target = target[:, :2]
+        nb_target = target[:, 2:Net.n_probs]
+
+        c_target = target[:, Net.n_probs:]
+        coords_target = [c_target[:, Net.c_parts[i][0]:Net.c_parts[i][1]] for i in range(4)]
+
+        loss = symmetry_loss(gc_pred, nb_pred, coords_pred, gc_target, nb_target, coords_target)
         loss.backward()
+
         optimizer.step()
         if batch_idx % args.log_interval == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
