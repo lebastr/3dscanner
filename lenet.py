@@ -21,19 +21,23 @@ class Net(nn.Module):
 
     c_parts = [(4*i, 4 + 4*i) for i in range(4)]
 
-    def __init__(self):
+    def __init__(self, kernel=5):
         super(Net, self).__init__()
+        dk = kernel-1
+        self.fc_in = (((64-dk) // 2 - dk) // 2) ** 2 * 50
+
         self.conv1 = nn.Conv2d(3, 20, 5, 1)
         self.conv2 = nn.Conv2d(20, 50, 5, 1)
-        self.fc1 = nn.Linear(4 * 4 * 50, 500)
+        self.fc1 = nn.Linear(self.fc_in, 500)
         self.fc2 = nn.Linear(500, self.n_points*2 + self.n_probs)
 
-    def forward(self, x):
+    def forward(self, inp):
+        x = inp
         x = F.relu(self.conv1(x))
         x = F.max_pool2d(x, 2, 2)
         x = F.relu(self.conv2(x))
         x = F.max_pool2d(x, 2, 2)
-        x = x.view(-1, 4 * 4 * 50)
+        x = x.view(inp.shape[0], -1)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
 
@@ -56,21 +60,24 @@ def symmetry_loss(prediction, target):
     rot = deque(range(4))
     losses = []
 
+    corner_losses = []  # for logging puproses
+
     for i in range(len(rot)):
         nb_pred = nb_pred_o[:, rot]
-        coords_pred = coords_pred_o[:, rot]
+        coords_pred = [v[:, rot] for v in coords_pred_o]
 
-        coord_corners_loss = torch.sum((coords_target[0] - coords_pred[0])**2 + (coords_target[1] - coords_pred[1])**2)
+        coord_corners_loss = torch.sum((coords_target[0] - coords_pred[0])**2 + (coords_target[1] - coords_pred[1])**2, dim=1)
+        corner_losses.append(coord_corners_loss)
 
         mse_coord_neighborhood_t = (coords_target[2] - coords_pred[2])**2 + (coords_target[3] - coords_pred[3])**2
-        neighborhood_loss = torch.sum((1-nb_target) * torch.log(1-nb_pred) + nb_target*(torch.log(nb_pred) + mse_coord_neighborhood_t))
+        neighborhood_loss = torch.sum((1-nb_target) * (-1) * torch.log(1-nb_pred) + nb_target*(-torch.log(nb_pred) + mse_coord_neighborhood_t), dim=1)
 
         loss = coord_corners_loss + neighborhood_loss
         losses.append(loss)
 
         rot.rotate(1)
 
-    sym_loss = torch.min(losses)
+    sym_loss = torch.min(torch.stack(losses), dim=0)[0]
 
     g_t = gc_target[:, 0]
     c_t = gc_target[:, 1]
@@ -78,10 +85,13 @@ def symmetry_loss(prediction, target):
     g_p = gc_pred[:, 0]
     c_p = gc_pred[:, 1]
 
-    color_loss = (1 - c_t) * torch.log(1 - c_p) + c_t * torch.log(c_p)
-    loss = (1-g_t) * torch.log(1-g_p) + g_t * (torch.log(g_p) + color_loss + sym_loss)
+    color_loss = -((1 - c_t) * torch.log(1 - c_p) + c_t * torch.log(c_p))
+    loss = (1-g_t) * (-1) * torch.log(1-g_p) + g_t * (-torch.log(g_p) + color_loss + sym_loss)
 
-    return loss, min(corner_losses)
+    if loss[0] < 0:
+        pass
+
+    return loss, torch.min(torch.stack(corner_losses), dim=0)[0]
 
 
 def train(args, model, device, train_loader, optimizer, epoch, writer=None):
@@ -98,6 +108,9 @@ def train(args, model, device, train_loader, optimizer, epoch, writer=None):
             prediction = model(data)
 
             loss, corner_loss = symmetry_loss(prediction, target)
+            loss = loss.mean()
+            corner_loss = corner_loss.mean()
+
             loss.backward()
             optimizer.step()
 
