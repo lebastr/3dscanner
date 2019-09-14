@@ -30,6 +30,7 @@ class Net(nn.Module):
         self.conv2 = nn.Conv2d(20, 50, 5, 1)
         self.fc1 = nn.Linear(self.fc_in, 500)
         self.fc2 = nn.Linear(500, self.n_points*2 + self.n_probs)
+        self.fc2.bias[:] = 0.5
 
     def forward(self, inp):
         x = inp
