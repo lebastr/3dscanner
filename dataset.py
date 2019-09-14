@@ -57,8 +57,9 @@ class GridDataset(td.Dataset):
         maxs = ng.max(axis=0).round().astype(int)
 
         patch = dp['img'][mins[1]:maxs[1], mins[0]:maxs[0], :]
-        corners -= mins
-        neighs -= mins
+
+        corners = corners - mins
+        neighs = neighs - mins
 
         kps_c = KeypointsOnImage.from_xy_array(corners, patch.shape)
         kps_n = KeypointsOnImage.from_xy_array(neighs, patch.shape)
