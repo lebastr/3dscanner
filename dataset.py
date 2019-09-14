@@ -3,7 +3,11 @@ from glob import glob
 
 import imgaug
 import imageio
+
 from imgaug.augmentables.kps import Keypoint, KeypointsOnImage
+import imgaug.augmenters as iaa
+
+
 
 import numpy as np
 
@@ -56,7 +60,19 @@ class GridDataset(td.Dataset):
         corners -= mins
         neighs -= mins
 
-        keypoints = np.concatenate([np.array([1, dp['color'], 1,1,1,1]), corners[:,0], corners[:,1], neighs[:,0], neighs[:,1]])
+        kps_c = KeypointsOnImage.from_xy_array(corners, patch.shape)
+        kps_n = KeypointsOnImage.from_xy_array(neighs, patch.shape)
 
-        return torch.tensor(patch).permute([2,0,1]).float() / 255, torch.tensor(keypoints).float()
+        kps = KeypointsOnImage(kps_c.keypoints + kps_n.keypoints, patch.shape)
+
+        seq = iaa.Sequential([iaa.Resize(64)])
+
+        norm_patch, norm_kps = seq(image=patch, keypoints=kps)
+
+        norm_coords = norm_kps.to_xy_array().reshape([2, 4, 2]).transpose(0,2,1)
+
+        #keypoints = np.concatenate([np.array([1, dp['color'], 1,1,1,1]), corners[:,0], corners[:,1], neighs[:,0], neighs[:,1]])
+        norm_keypoints = np.concatenate([np.array([1, dp['color'], 1, 1, 1, 1]), norm_coords.reshape(-1)])
+
+        return torch.tensor(norm_patch).permute([2,0,1]).float() / 255, torch.tensor(norm_keypoints).float()
         #return { 'img': patch, 'corners': corners , 'neighs': neighs, 'keypoints':keypoints}
