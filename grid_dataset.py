@@ -18,10 +18,11 @@ import torch.utils.data as td
 
 
 class GridDataset(td.Dataset):
-    def __init__(self, path):
+    def __init__(self, path, augment=True):
         self.path = path
         label_files = glob(os.path.join(path, '*.txt'))
 
+        self.augment = augment
         self.dataset = []
 
         for fn in label_files:
@@ -66,7 +67,11 @@ class GridDataset(td.Dataset):
 
         kps = KeypointsOnImage(kps_c.keypoints + kps_n.keypoints, patch.shape)
 
-        seq = iaa.Sequential([iaa.Resize(64)])
+        augs = [iaa.Resize(64)]
+        if self.augment:
+            augs += [iaa.Fliplr(p=0.5), iaa.Flipud(p=0.5), iaa.CropAndPad(percent=0.1), iaa.AdditiveGaussianNoise(scale=(0,0.05*255))]
+
+        seq = iaa.Sequential(augs)
 
         norm_patch, norm_kps = seq(image=patch, keypoints=kps)
 

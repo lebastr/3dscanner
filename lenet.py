@@ -226,6 +226,8 @@ def main():
     parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                         help='how many batches to wait before logging training status')
 
+    parser.add_argument('--num-samples', type=int, default=5, help='the number of samples for renders predicitons on')
+
     parser.add_argument('--dataset', default='./data', help='path to dataset')
 
     parser.add_argument('--restore', type=str2bool, help='restore from checkpoint if available')
@@ -257,8 +259,13 @@ def main():
     writer = SummaryWriter(get_log_dir(args))
 
     samples = []
-    for i in range(2):
-        samples.append(grid_dataset[i])
+    stop_sample_collection = False
+    while not stop_sample_collection:
+        for i in range(len(grid_dataset)):
+            samples.append(grid_dataset[i])
+            if len(samples) >= args.num_samples:
+                stop_sample_collection = True
+                break
 
     while epoch <= args.epochs:
         train(args, model, device, train_loader, opt, epoch, writer=writer)
