@@ -4,6 +4,7 @@ import argparse
 from collections import deque
 import os
 
+import matplotlib.pyplot as plt
 from tensorboardX import SummaryWriter
 
 import torch
@@ -13,7 +14,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from grid_dataset import GridDataset
-
+import utils
 
 class Net(nn.Module):
     n_points = 8
@@ -30,7 +31,7 @@ class Net(nn.Module):
         self.conv2 = nn.Conv2d(20, 50, 5, 1)
         self.fc1 = nn.Linear(self.fc_in, 500)
         self.fc2 = nn.Linear(500, self.n_points*2 + self.n_probs)
-        self.fc2.bias[:] = 0.5
+        self.fc2.bias.data[self.n_probs:] = 0.5
 
     def forward(self, inp):
         x = inp
@@ -123,6 +124,15 @@ def train(args, model, device, train_loader, optimizer, epoch, writer=None):
         writer.add_scalar('corner_loss', total_corner_loss, epoch)
 
 
+def render_predictions(model, samples, epoch, dir_path):
+    with torch.no_grad():
+        for i, (img, target) in enumerate(samples):
+            out = model.forward(img[None,:])
+            fig = utils.plot_target_prediction(img, target, out[0])
+            fig.savefig(os.path.join(dir_path, 'sample%02d_ep%03d.jpg' % (i, epoch)))
+            plt.close(fig)
+
+
 def test(args, model, device, test_loader):
     model.eval()
     test_loss = 0
@@ -148,6 +158,7 @@ def get_log_dir(args) -> str:
 
 def get_checkpoint_name(args, iter=None) -> str:
     cp_dir = os.path.join(args.exp_dir, args.name, 'checkpoints')
+    os.makedirs(cp_dir, exist_ok=True)
 
     if iter is not None:
         cpt_name = os.path.join(cp_dir, '%s_iter%06d.pth' % (args.name, iter))
@@ -155,6 +166,11 @@ def get_checkpoint_name(args, iter=None) -> str:
         cpt_name = os.path.join(cp_dir, '%s_iter_last.pth' % args.name)
     return cpt_name
 
+
+def get_sample_path(args, name):
+    ret = os.path.join(args.exp_dir, args.name, 'samples_' + name)
+    os.makedirs(ret, exist_ok=True)
+    return ret
 
 def save_checkpoint(args, model, optim, iter):
     cpt = {'iter': iter,
@@ -240,8 +256,13 @@ def main():
 
     writer = SummaryWriter(get_log_dir(args))
 
+    samples = []
+    for i in range(2):
+        samples.append(grid_dataset[i])
+
     while epoch <= args.epochs:
         train(args, model, device, train_loader, opt, epoch, writer=writer)
+        render_predictions(model, samples, epoch, get_sample_path(args, 'train'))
         epoch += 1
 
     save_checkpoint(args, model, opt, epoch)
