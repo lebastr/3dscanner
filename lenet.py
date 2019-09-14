@@ -6,6 +6,7 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 from collections import deque
 
+
 class Net(nn.Module):
     n_points = 8
     n_probs = 6
@@ -27,15 +28,23 @@ class Net(nn.Module):
         x = x.view(-1, 4 * 4 * 50)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
-        probs = F.sigmoid(x[:, :self.n_probs])
-        coords = x[:, self.n_probs:]
 
-        coord_parts = [coords[:, self.c_parts[i][0] : self.c_parts[i][1]] for i in range(4)]
+        x[:, :self.n_probs] = F.sigmoid(x[:, :self.n_probs])
+        return x
 
-        return probs[:, 2], probs[:, 2:self.n_probs], coord_parts
+    @classmethod
+    def extract_data(cls, tensor):
+        gc = tensor[:, :2]
+        nb = tensor[:, 2:cls.n_probs]
+        coords_t = tensor[:, cls.n_probs:]
+        coords = [coords_t[:, cls.c_parts[i][0] : cls.c_parts[i][1]] for i in range(4)]
+        return gc, nb, coords
 
 
-def symmetry_loss(gc_pred, nb_pred_o, coords_pred_o, gc_target, nb_target, coords_target):
+def symmetry_loss(prediction, target):
+    gc_pred, nb_pred_o, coords_pred_o = Net.extract_data(prediction)
+    gc_target, nb_target, coords_target = Net.extract_data(target)
+
     rot = deque(range(4))
     losses = []
 
@@ -74,15 +83,9 @@ def train(args, model, device, train_loader, optimizer, epoch):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
 
-        gc_pred, nb_pred, coords_pred = model(data)
+        prediction = model(data)
 
-        gc_target = target[:, :2]
-        nb_target = target[:, 2:Net.n_probs]
-
-        c_target = target[:, Net.n_probs:]
-        coords_target = [c_target[:, Net.c_parts[i][0]:Net.c_parts[i][1]] for i in range(4)]
-
-        loss = symmetry_loss(gc_pred, nb_pred, coords_pred, gc_target, nb_target, coords_target)
+        loss = symmetry_loss(prediction, target)
         loss.backward()
 
         optimizer.step()
@@ -90,6 +93,14 @@ def train(args, model, device, train_loader, optimizer, epoch):
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                        100. * batch_idx / len(train_loader), loss.item()))
+
+
+# def plot(data, target, prediction, iteration_number, log_dir):
+#     gc_pred, nb_pred_o, coords_pred_o = Net.extract_data(prediction)
+#     gc_target, nb_target, coords_target = Net.extract_data(target)
+#
+#
+#
 
 
 def test(args, model, device, test_loader):
