@@ -42,7 +42,6 @@ class Net(nn.Module):
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
 
-        x[:, :self.n_probs] = F.sigmoid(x[:, :self.n_probs])
         return x
 
     @classmethod
@@ -71,7 +70,7 @@ def symmetry_loss(prediction, target):
         corner_losses.append(coord_corners_loss)
 
         mse_coord_neighborhood_t = (coords_target[2] - coords_pred[2])**2 + (coords_target[3] - coords_pred[3])**2
-        neighborhood_loss = torch.sum((1-nb_target) * (-1) * torch.log(1-nb_pred) + nb_target*(-torch.log(nb_pred) + mse_coord_neighborhood_t), dim=1)
+        neighborhood_loss = torch.sum(F.binary_cross_entropy_with_logits(nb_pred, nb_target) + nb_target * mse_coord_neighborhood_t, dim=1)
 
         loss = coord_corners_loss + neighborhood_loss
         losses.append(loss)
@@ -86,11 +85,8 @@ def symmetry_loss(prediction, target):
     g_p = gc_pred[:, 0]
     c_p = gc_pred[:, 1]
 
-    color_loss = -((1 - c_t) * torch.log(1 - c_p) + c_t * torch.log(c_p))
-    loss = (1-g_t) * (-1) * torch.log(1-g_p) + g_t * (-torch.log(g_p) + color_loss + sym_loss)
-
-    if loss[0] < 0:
-        pass
+    color_loss = F.binary_cross_entropy_with_logits(c_p, c_t)
+    loss = F.binary_cross_entropy_with_logits(g_p, g_t) + g_t * (color_loss + sym_loss)
 
     return loss, torch.min(torch.stack(corner_losses), dim=0)[0]
 
