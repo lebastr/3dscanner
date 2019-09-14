@@ -1,10 +1,18 @@
+#!/usr/bin/env python3
+
 import argparse
+from collections import deque
+import os
+
+from tensorboardX import SummaryWriter
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torchvision import datasets, transforms
-from collections import deque
+from torch.utils.data import DataLoader
+
+from grid_dataset import GridDataset
 
 
 class Net(nn.Module):
@@ -73,34 +81,36 @@ def symmetry_loss(prediction, target):
     color_loss = (1 - c_t) * torch.log(1 - c_p) + c_t * torch.log(c_p)
     loss = (1-g_t) * torch.log(1-g_p) + g_t * (torch.log(g_p) + color_loss + sym_loss)
 
-    return loss
+    return loss, min(corner_losses)
 
 
-def train(args, model, device, train_loader, optimizer, epoch):
+def train(args, model, device, train_loader, optimizer, epoch, writer=None):
     model.train()
 
-    for batch_idx, (data, target) in enumerate(train_loader):
-        data, target = data.to(device), target.to(device)
-        optimizer.zero_grad()
+    iter = 0
+    total_loss = 0
+    total_corner_loss = 0
+    while iter < args.epoch_len:
+        for data, target in train_loader:
+            data, target = data.to(device), target.to(device)
+            optimizer.zero_grad()
 
-        prediction = model(data)
+            prediction = model(data)
 
-        loss = symmetry_loss(prediction, target)
-        loss.backward()
+            loss, corner_loss = symmetry_loss(prediction, target)
+            loss.backward()
+            optimizer.step()
 
-        optimizer.step()
-        if batch_idx % args.log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                       100. * batch_idx / len(train_loader), loss.item()))
+            total_loss += loss.item()
+            total_corner_loss += corner_loss.item()
+            iter += 1
 
-
-# def plot(data, target, prediction, iteration_number, log_dir):
-#     gc_pred, nb_pred_o, coords_pred_o = Net.extract_data(prediction)
-#     gc_target, nb_target, coords_target = Net.extract_data(target)
-#
-#
-#
+    total_loss /= iter
+    total_corner_loss /= iter
+    print('Epoch %d: corner_loss %.6f; loss %.6f' % (epoch, total_corner_loss, total_loss))
+    if writer:
+        writer.add_scalar('loss', total_loss, epoch)
+        writer.add_scalar('corner_loss', total_corner_loss, epoch)
 
 
 def test(args, model, device, test_loader):
@@ -122,59 +132,109 @@ def test(args, model, device, test_loader):
         100. * correct / len(test_loader.dataset)))
 
 
+def get_log_dir(args) -> str:
+    return os.path.join(args.exp_dir, args.name, 'logs')
+
+
+def get_checkpoint_name(args, iter=None) -> str:
+    cp_dir = os.path.join(args.exp_dir, args.name, 'checkpoints')
+
+    if iter is not None:
+        cpt_name = os.path.join(cp_dir, '%s_iter%06d.pth' % (args.name, iter))
+    else:
+        cpt_name = os.path.join(cp_dir, '%s_iter_last.pth' % args.name)
+    return cpt_name
+
+
+def save_checkpoint(args, model, optim, iter):
+    cpt = {'iter': iter,
+           'model_state': model.state_dict(),
+           'optim_state': optim.state_dict()
+          }
+
+    cpt_name = get_checkpoint_name(args, iter)
+    cpt_link = get_checkpoint_name(args, None)
+    torch.save(cpt, cpt_name)
+    os.symlink(os.path.abspath(cpt_name), cpt_link)
+
+
+def load_checkpoint(args, model, optim) -> int:
+    if args.restore_from is None:
+        cpt_name = model.get_checkpoint_name(args, None)
+    else:
+        cpt_name = args.restore_from
+
+    st = torch.load(cpt_name)
+    model.load_state_dict(st['model_state'])
+    optim.load_state_dict(st['optim_state'])
+
+    return st['iter']
+
+
+def str2bool(v):
+    if isinstance(v, bool):
+       return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
 def main():
     # Training settings
-    parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
+    parser = argparse.ArgumentParser(description='Grid Lenet Trainer')
     parser.add_argument('--batch-size', type=int, default=64, metavar='N',
                         help='input batch size for training (default: 64)')
-    parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
-                        help='input batch size for testing (default: 1000)')
     parser.add_argument('--epochs', type=int, default=10, metavar='N',
-                        help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
+                        help='number of iterations to train (default: 100)')
+    parser.add_argument('--epoch_len', type=int, default=10)
+    parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
                         help='learning rate (default: 0.01)')
-    parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
-                        help='SGD momentum (default: 0.5)')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='disables CUDA training')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
+    parser.add_argument('--deterministic', type=str2bool, help='make dataloader deterministic')
     parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                         help='how many batches to wait before logging training status')
 
-    parser.add_argument('--save-model', action='store_true', default=False,
-                        help='For Saving the current Model')
+    parser.add_argument('--dataset', default='./data', help='path to dataset')
+
+    parser.add_argument('--restore', type=str2bool, help='restore from checkpoint if available')
+    parser.add_argument('--restore-from', help='checkpoint name to use instead of default one')
+    parser.add_argument('--exp-dir', default='experiments', help='place for storing experiment-related data')
+    parser.add_argument('--name', required=True, help='Network name, for saving checkpoints and logs')
+
     args = parser.parse_args()
     use_cuda = not args.no_cuda and torch.cuda.is_available()
 
     torch.manual_seed(args.seed)
+    if use_cuda:
+        torch.cuda.manual_seed(args.seed)
 
+    grid_dataset = GridDataset(path=args.dataset)
     device = torch.device("cuda" if use_cuda else "cpu")
-
     kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
-    train_loader = torch.utils.data.DataLoader(
-        datasets.MNIST('../data', train=True, download=True,
-                       transform=transforms.Compose([
-                           transforms.ToTensor(),
-                           transforms.Normalize((0.1307,), (0.3081,))
-                       ])),
-        batch_size=args.batch_size, shuffle=True, **kwargs)
-    test_loader = torch.utils.data.DataLoader(
-        datasets.MNIST('../data', train=False, transform=transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,))
-        ])),
-        batch_size=args.test_batch_size, shuffle=True, **kwargs)
+    train_loader = DataLoader(dataset=grid_dataset, batch_size=args.batch_size,
+                              shuffle=not args.deterministic, **kwargs)
 
     model = Net().to(device)
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    opt = optim.Adam(model.parameters(), lr=args.lr)
 
-    for epoch in range(1, args.epochs + 1):
-        train(args, model, device, train_loader, optimizer, epoch)
-        test(args, model, device, test_loader)
+    if args.restore:
+        epoch = load_checkpoint(args, model, opt)
+    else:
+        epoch = 1
 
-    if (args.save_model):
-        torch.save(model.state_dict(), "mnist_cnn.pt")
+    writer = SummaryWriter(get_log_dir(args))
+
+    while epoch <= args.epochs:
+        train(args, model, device, train_loader, opt, epoch, writer=writer)
+        epoch += 1
+
+    save_checkpoint(args, model, opt, epoch)
 
 
 if __name__ == '__main__':

@@ -1,9 +1,23 @@
 with import <nixpkgs> {};
 let python_env = python3.withPackages (ps: with ps;
       let local_imgaug = callPackage ./imgaug.nix { };
-      in [ numpy matplotlib jupyter pillow opencv3
-           scipy imageio local_imgaug
-           scikitimage pytorch tqdm networkx ]);
+          local_tensorboardx = callPackage ./tensorboardx.nix { };
+
+      in [
+      imageio
+      jupyter
+      local_imgaug
+      local_tensorboardx
+      matplotlib
+      networkx
+      numpy
+      opencv3
+      pillow
+      pytorch
+      scikitimage
+      scipy
+      tqdm
+      ]);
 
     link = "python-env";
     shellHook = ''
