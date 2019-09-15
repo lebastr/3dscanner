@@ -4,54 +4,24 @@ import argparse
 from collections import deque
 import os
 
+import matplotlib
+matplotlib.use('PS')
+
+from models import Net
+from utils import load_checkpoint_file
+
+
+
 import matplotlib.pyplot as plt
 from tensorboardX import SummaryWriter
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from grid_dataset import GridDataset
 import utils
-
-class Net(nn.Module):
-    n_points = 8
-    n_probs = 6
-
-    c_parts = [(4*i, 4 + 4*i) for i in range(4)]
-
-    def __init__(self, kernel=5):
-        super(Net, self).__init__()
-        dk = kernel-1
-        self.fc_in = (((64-dk) // 2 - dk) // 2) ** 2 * 50
-
-        self.conv1 = nn.Conv2d(3, 20, 5, 1)
-        self.conv2 = nn.Conv2d(20, 50, 5, 1)
-        self.fc1 = nn.Linear(self.fc_in, 500)
-        self.fc2 = nn.Linear(500, self.n_points*2 + self.n_probs)
-        self.fc2.bias.data[self.n_probs:] = 0.5
-
-    def forward(self, inp):
-        x = inp
-        x = F.relu(self.conv1(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.conv2(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = x.view(inp.shape[0], -1)
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-
-        return x
-
-    @classmethod
-    def extract_data(cls, tensor):
-        gc = tensor[:, :2]
-        nb = tensor[:, 2:cls.n_probs]
-        coords_t = tensor[:, cls.n_probs:]
-        coords = [coords_t[:, cls.c_parts[i][0] : cls.c_parts[i][1]] for i in range(4)]
-        return gc, nb, coords
 
 
 def symmetry_loss(prediction, target):
@@ -92,7 +62,7 @@ def symmetry_loss(prediction, target):
     return loss, torch.min(torch.stack(corner_losses), dim=0)[0]
 
 
-def train(args, model, device, train_loader, optimizer, epoch, writer=None):
+def train(args, model, train_loader, optimizer, epoch, writer=None):
     model.train()
 
     iter = 0
@@ -100,7 +70,7 @@ def train(args, model, device, train_loader, optimizer, epoch, writer=None):
     total_corner_loss = 0
     while iter < args.epoch_len:
         for data, target in train_loader:
-            data, target = data.to(device), target.to(device)
+            data, target = data.to(model.device), target.to(model.device)
             optimizer.zero_grad()
 
             prediction = model(data)
@@ -127,7 +97,7 @@ def train(args, model, device, train_loader, optimizer, epoch, writer=None):
 def render_predictions(model, samples, epoch, dir_path):
     with torch.no_grad():
         for i, (img, target) in enumerate(samples):
-            out = model.forward(img[None,:])
+            out = model.forward(img[None,:].to(model.device))
             fig = utils.plot_target_prediction(img, target, out[0])
             fig.savefig(os.path.join(dir_path, 'sample%02d_ep%03d.jpg' % (i, epoch)))
             plt.close(fig)
@@ -181,6 +151,8 @@ def save_checkpoint(args, model, optim, iter):
     cpt_name = get_checkpoint_name(args, iter)
     cpt_link = get_checkpoint_name(args, None)
     torch.save(cpt, cpt_name)
+    if os.path.exists(cpt_link):
+        os.remove(cpt_link)
     os.symlink(os.path.abspath(cpt_name), cpt_link)
 
 
@@ -190,11 +162,7 @@ def load_checkpoint(args, model, optim) -> int:
     else:
         cpt_name = args.restore_from
 
-    st = torch.load(cpt_name)
-    model.load_state_dict(st['model_state'])
-    optim.load_state_dict(st['optim_state'])
-
-    return st['iter']
+    return load_checkpoint_file(cpt_name, model, optim)
 
 
 def str2bool(v):
@@ -235,6 +203,8 @@ def main():
     parser.add_argument('--exp-dir', default='experiments', help='place for storing experiment-related data')
     parser.add_argument('--name', required=True, help='Network name, for saving checkpoints and logs')
 
+    parser.add_argument('--wd', default=0, type=float, help='weight-decay')
+
     args = parser.parse_args()
     use_cuda = not args.no_cuda and torch.cuda.is_available()
 
@@ -249,7 +219,9 @@ def main():
                               shuffle=not args.deterministic, **kwargs)
 
     model = Net().to(device)
-    opt = optim.Adam(model.parameters(), lr=args.lr)
+    model.device = device
+
+    opt = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)
 
     if args.restore:
         epoch = load_checkpoint(args, model, opt)
@@ -268,11 +240,12 @@ def main():
                 break
 
     while epoch <= args.epochs:
-        train(args, model, device, train_loader, opt, epoch, writer=writer)
-        render_predictions(model, samples, epoch, get_sample_path(args, 'train'))
+        train(args, model, train_loader, opt, epoch, writer=writer)
+        if args.log_interval:
+            render_predictions(model, samples, epoch, get_sample_path(args, 'train'))
+            save_checkpoint(args, model, opt, epoch)
         epoch += 1
 
-    save_checkpoint(args, model, opt, epoch)
 
 
 if __name__ == '__main__':
