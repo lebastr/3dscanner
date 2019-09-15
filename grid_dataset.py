@@ -1,7 +1,6 @@
 import os
 from glob import glob
 
-import imgaug
 import imageio
 
 from imgaug.augmentables.kps import Keypoint, KeypointsOnImage
@@ -67,9 +66,10 @@ class GridDataset(td.Dataset):
 
         kps = KeypointsOnImage(kps_c.keypoints + kps_n.keypoints, patch.shape)
 
-        augs = [iaa.Resize(64)]
         if self.augment:
-            augs += [iaa.Fliplr(p=0.5), iaa.Flipud(p=0.5), iaa.CropAndPad(percent=0.1), iaa.AdditiveGaussianNoise(scale=(0,0.05*255))]
+            augs = [iaa.Affine(rotate=(-10,10)), iaa.CropAndPad(percent=0.1), iaa.Resize(64), iaa.AdditiveGaussianNoise(scale=(0,0.05*255))]
+        else:
+            augs = [iaa.Resize(64)]
 
         seq = iaa.Sequential(augs)
 
