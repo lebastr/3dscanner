@@ -4,9 +4,6 @@ import argparse
 from collections import deque
 import os
 
-import matplotlib
-matplotlib.use('PS')
-
 from models import Net
 from utils import load_checkpoint_file
 
