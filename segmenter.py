@@ -32,6 +32,8 @@ class Detection:
         max_c = np.max(self.corners, axis=0)
         return np.mean(max_c - min_c)
 
+    def estim_center(self):
+            return self.corners.mean(axis=0)
 
 class Candidate:
     def __init__(self, idx: Idx, prev_idx: Idx, coords: Coords, cell_size: float, priority: float):
@@ -61,16 +63,19 @@ class Segmenter():
         self.front_pq:List[Tuple[float, Candidate]] = []  # key is confidence level with negative sign
         self.segment_map = {}
 
-    def segment_from(self, coords:Coords, cell_size):
+    def segment_from(self, coords:Coords, cell_size, max_steps=None):
         """ Detect cell graph starting from point, process only neighbors with confidence_level > self.threshold """
 
         heapq.heappush(self.front_pq, (Candidate(idx=(0,0), prev_idx=0, coords=coords, cell_size=cell_size, priority=10)))
+        self.process_front(max_steps)
 
-        while len(self.front_pq) > 0:
+    def process_front(self, max_steps=None):
+        k=0
+        while len(self.front_pq) > 0 and (max_steps is None or k < max_steps):
             print('#front', len(self.front_pq))
             c = heapq.heappop(self.front_pq)
             self.detect_cell(c)
-            break
+            k += 1
 
     def detect_cell(self, c: Candidate):
         """ Run detector on signle candidate and store results """
@@ -83,7 +88,8 @@ class Segmenter():
         if ul_corner[0] < 0 or ul_corner[1] < 0 or dr_corner[0] > self.img.shape[1] or dr_corner[1] > self.img.shape[0]:
             raise RuntimeError('Run out of bounds', ul_corner, dr_corner, self.img.shape)
 
-        crop = self.img[round(ul_corner[1]):round(dr_corner[1]), round(ul_corner[0]):round(dr_corner[0]), :]
+        print(ul_corner, dr_corner)
+        crop = self.img[int(round(ul_corner[1])):int(round(dr_corner[1])), int(round(ul_corner[0])):int(round(dr_corner[0])), :]
 
         cs = self.cell_detector.crop_size
         crop = ia.imresize_single_image(crop, sizes=(cs,cs))
@@ -91,7 +97,7 @@ class Segmenter():
         with torch.no_grad():
             inp = u.build_batch(crop).to(self.cell_detector.device)
             prediction = self.cell_detector.forward(inp)
-            detection = Detection(idx=c.idx, prev_idx=c.prev_idx, zero=ul_corner, crop_scales=(csz*2,csz*2),
+            detection = Detection(idx=c.idx, prev_idx=c.prev_idx, zero=ul_corner - self.img_disp, crop_scales=(csz*2,csz*2),
                                   extractor=self.cell_detector.extract_data, prediction=prediction)
 
             if c.idx not in self.segment_map or self.segment_map[c.idx].confidence < detection.confidence:
@@ -107,13 +113,60 @@ class Segmenter():
 
     def guess_directions(self, d: Detection):
         """ Find rotation of predictions so the first element is closest to upper direction """
-        c = d.corners.mean()
+        c = d.estim_center()
         dirs = d.neighs - c
         angles = np.arctan2(dirs[:,0], dirs[:, 1])
         top_idx = np.argmin(np.abs(angles - np.pi / 2))
         ds = deque([(0,-1), (1,0), (0,1), (-1,0)])
         ds.rotate(-top_idx)
         return ds
+
+    def visualize(self, ax=None, left=None, right=None):
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            _, ax = plt.subplots(1, 1)
+
+        c = self.img_disp
+        orig_img = self.img[c:-c, c:-c, :]
+
+        centers = [ d.estim_center() for d in self.segment_map.values()]
+        centers = np.stack(centers)
+
+        if left is not None:
+            centers -= left
+            orig_img = orig_img[left[1]:right[1], left[0]:right[0]]
+
+        #small_img = ia.imresize_single_image(orig_img, 0.25)
+        #ax.imshow(small_img)
+        ax.imshow(orig_img)
+        ax.plot(centers[:,0], centers[:, 1], 'g.')
+
+        return ax
+
+    def visualize_detection(self, d: Detection, ax=None):
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            _, ax = plt.subplots(1, 1)
+
+        cs = d.estim_cell_size()
+        center = d.estim_center()
+
+        c = self.img_disp
+        orig_img = self.img[c:-c, c:-c, :]
+        ul = (center - cs * 3).astype(int)
+        dr = (center + cs * 3).astype(int)
+        crop = orig_img[ul[1]:dr[1], ul[0]:dr[0]]
+
+        ax.imshow(crop)
+
+        neighs = d.neighs - ul
+        ax.plot(neighs[:,1], neighs[:,0], '.y')
+
+        corners = d.corners - ul
+        ax.plot(corners[:, 1], corners[:, 0], '.r')
+        return ax
 
 
 if __name__ == '__main__':
