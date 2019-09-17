@@ -17,6 +17,8 @@ class Detection:
         gc_pred, nb_pred, coords_pred = extractor(prediction)
 
         xc_pred, yc_pred, xn_pred, yn_pred = [u.numpify(coords_pred[i][0]) for i in range(4)]
+        xn_pred[:] = [0,1,1,0]
+        yn_pred[:] = [0,0,1,1]
 
         self.prev_idx = prev_idx
         self.idx = idx

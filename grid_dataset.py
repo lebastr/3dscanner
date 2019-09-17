@@ -82,5 +82,5 @@ class GridDataset(td.Dataset):
 
         #keypoints = np.concatenate([np.array([1, dp['color'], 1,1,1,1]), corners[:,0], corners[:,1], neighs[:,0], neighs[:,1]])
         norm_keypoints = np.concatenate([np.array([1, dp['color'], 1, 1, 1, 1]), norm_coords.reshape(-1)])
-        return torch.tensor(norm_patch).permute([2,0,1]).float() / 255, torch.tensor(norm_keypoints).float()
+        return torch.tensor(norm_patch).permute([2,0,1]).float() / 255, torch.tensor(norm_keypoints).float(), mins, maxs-mins
         #return { 'img': patch, 'corners': corners , 'neighs': neighs, 'keypoints':keypoints}
