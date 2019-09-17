@@ -23,13 +23,11 @@ def plot_target_prediction(img, target, prediction, ax=None):
 
     ax.imshow(img)
 
-    ax.scatter(xc_target, yc_target, c=colors, s=100, marker='+')
-    ax.scatter(xn_target, yn_target, c=colors, s=100, marker='x')
+    ax.scatter(xc_target, yc_target, c=colors, s=100, marker='x')
+    ax.scatter(xn_target, yn_target, c=colors, s=100, marker='*')
 
-    ax.scatter(xc_pred, yc_pred, c=colors, s=50, marker='+')
-    ax.scatter(xn_pred, yn_pred, c=colors, s=50, marker='x')
-
-    return ax.figure
+    ax.scatter(xc_pred, yc_pred, c=colors, s=50, marker='x')
+    ax.scatter(xn_pred, yn_pred, c=colors, s=50, marker='*')
 
 
 def numpify(x):
@@ -42,8 +40,11 @@ def numpify(x):
         return x
 
 
-def build_batch(img: np.ndarray):
-    return torch.tensor(img.transpose([2,0,1])[None, :]).float() / 255
+def build_batch(img):
+    if isinstance(img, np.ndarray):
+        img = torch.tensor(img.transpose([2,0,1])).float() / 255
+
+    return img[None, :]
 
 
 def load_checkpoint_file(cpt_path, model, optim=None):

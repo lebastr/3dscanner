@@ -74,10 +74,10 @@ class Segmenter():
         while len(self.front_pq) > 0 and (max_steps is None or k < max_steps):
             print('#front', len(self.front_pq))
             c = heapq.heappop(self.front_pq)
-            self.detect_cell(c)
+            self.detect_candidate(c)
             k += 1
 
-    def detect_cell(self, c: Candidate):
+    def detect_candidate(self, c: Candidate):
         """ Run detector on signle candidate and store results """
         print('processing', c)
         center = c.coords + self.img_disp
@@ -90,26 +90,28 @@ class Segmenter():
 
         print(ul_corner, dr_corner)
         crop = self.img[int(round(ul_corner[1])):int(round(dr_corner[1])), int(round(ul_corner[0])):int(round(dr_corner[0])), :]
-
         cs = self.cell_detector.crop_size
-        crop = ia.imresize_single_image(crop, sizes=(cs,cs))
+        norm_crop = ia.imresize_single_image(crop, sizes=(cs,cs))
+        self.detect_on_crop(norm_crop, zero=ul_corner - self.img_disp, idx=c.idx, prev_idx=c.prev_idx, crop_scales=(crop.shape[1], crop.shape[0]))
 
+    def detect_on_crop(self, crop, zero, crop_scales, idx, prev_idx=None):
         with torch.no_grad():
             inp = u.build_batch(crop).to(self.cell_detector.device)
             prediction = self.cell_detector.forward(inp)
-            detection = Detection(idx=c.idx, prev_idx=c.prev_idx, zero=ul_corner - self.img_disp, crop_scales=(csz*2,csz*2),
+            detection = Detection(idx=idx, prev_idx=prev_idx, zero=zero, crop_scales=crop_scales,
                                   extractor=self.cell_detector.extract_data, prediction=prediction)
 
-            if c.idx not in self.segment_map or self.segment_map[c.idx].confidence < detection.confidence:
-                self.segment_map[c.idx] = detection
+            if idx not in self.segment_map or self.segment_map[idx].confidence < detection.confidence:
+                self.segment_map[idx] = detection
 
                 dirs = self.guess_directions(detection)
                 for i in range(4):
                     conf = detection.nb_confidences[i]
                     if conf > self.threshold:
-                        new_idx = (c.idx[0] + dirs[i][0], c.idx[1] + dirs[i][1])
-                        cand = Candidate(idx=new_idx , prev_idx=c.idx, coords=detection.neighs[i], priority=conf, cell_size = detection.estim_cell_size())
+                        new_idx = (idx[0] + dirs[i][0], idx[1] + dirs[i][1])
+                        cand = Candidate(idx=new_idx , prev_idx=idx, coords=detection.neighs[i], priority=conf, cell_size = detection.estim_cell_size())
                         heapq.heappush(self.front_pq, cand)
+            return prediction
 
     def guess_directions(self, d: Detection):
         """ Find rotation of predictions so the first element is closest to upper direction """
@@ -162,10 +164,10 @@ class Segmenter():
         ax.imshow(crop)
 
         neighs = d.neighs - ul
-        ax.plot(neighs[:,1], neighs[:,0], '.y')
+        ax.plot(neighs[:,1], neighs[:,0], '*y')
 
         corners = d.corners - ul
-        ax.plot(corners[:, 1], corners[:, 0], '.r')
+        ax.plot(corners[:, 1], corners[:, 0], 'xr')
         return ax
 
 
